@@ -7166,6 +7166,7 @@ module Flags = struct
   let files = "files"
   let ppx_flags = "ppx-flags"
   let build_output_prefix = ("build-output-prefix", Filename.current_dir_name)
+  let static_resources = "static-resources"
 end
 module String_set = Depend.StringSet 
 
@@ -7320,6 +7321,8 @@ let output_ninja (global_data : Sexp_eval.env)  =
   let build_output_prefix = expect_string Flags.build_output_prefix global_data in 
   let bs_external_includes =
     expect_string_list Flags.bs_external_includes  global_data in 
+  let static_resources = 
+    expect_string_list Flags.static_resources global_data in
   let ppx_flags = 
     String.concat space @@
       Ext_list.flat_map (fun x -> ["-ppx";  x ])  @@
@@ -7359,7 +7362,7 @@ rule build_ast
   command = ${bsc} ${pp_flags} ${ppx_flags} ${bsc_computed_flags} -c -o ${out} -bs-syntax-only -bs-binary-ast ${in}
   description = Building ast  ${out}
 rule build_ast_from_reason_impl
-  command = ${bsc} -pp refmt ${ppx_flags} ${bsc_computed_flags} -c -o ${out} -bs-syntax-only -bs-binary-ast -impl ${in}        
+  command = ${bsc} -pp refmt ${ppx_flags} ${bsc_computed_flags} -c -o ${out} -bs-syntax-only -bs-binary-ast -impl ${in}     
   description = Building ast from reason re ${out}
 rule build_ast_from_reason_intf
   command = ${bsc} -pp refmt ${ppx_flags} ${bsc_computed_flags} -c -o ${out} -bs-syntax-only -bs-binary-ast -intf ${in}        
@@ -7375,20 +7378,26 @@ rule build_ml_from_mll
 # this rule has multiple output        
 rule build_cmj_only
   depfile = ${in}.d
-  command = ${bsc} -bs-no-builtin-ppx-ml ${bsc_computed_flags} -o ${in} -c -impl ${in}
+  command = ${bsc} -bs-no-builtin-ppx-ml -bs-no-implicit-include ${bsc_computed_flags} -o ${in} -c -impl ${in}
   description = Building cmj - ${out}
 
 # TODO: Windows path concat 
 rule build_cmj_cmi
   depfile = ${in}.d
-  command = ${bsc} -intf-suffix .foobar -bs-no-builtin-ppx-ml ${bsc_computed_flags} -o ${in} -c -impl ${in}
+  command = ${bsc} -bs-assume-no-mli -bs-no-implicit-include -bs-no-builtin-ppx-ml ${bsc_computed_flags} -o ${in} -c -impl ${in}
   description = Building cmj and cmi - ${out}
 
 rule build_cmi
   depfile = ${in}.d
-  command = ${bsc} -bs-no-builtin-ppx-mli ${bsc_computed_flags} -o ${out} -c -intf ${in}
+  command = ${bsc} -bs-no-builtin-ppx-mli -bs-no-implicit-include ${bsc_computed_flags} -o ${out} -c -intf ${in}
   description = Building cmi - ${out}
 |};
+    if static_resources <> []   then 
+      output_string oc {|
+rule copy_resources
+  command = cp ${in}  ${out}
+  description = Copying ${in} into ${out}
+|}
     in
 
     bs_files
@@ -7478,6 +7487,15 @@ rule build_cmi
           | None -> ()
         end
       );
+    static_resources 
+    |> List.iter (fun x -> 
+        output_string oc 
+          (Printf.sprintf "build %s : copy_resources %s\n"
+             (build_output_prefix // x) x 
+          );
+        all_deps := (build_output_prefix // x) :: !all_deps
+      )
+    ;
     output_string oc  {|
 rule reload
       command = ${bsbuild} -init
@@ -7498,8 +7516,9 @@ let write_ninja_file () =
 
 let load_ninja = ref false
 
+let ninja = "ninja" 
 let load_ninja ninja_flags = 
-  let ninja = "ninja" in
+
   Unix.execvp ninja
     (Array.concat 
        [
@@ -7507,6 +7526,9 @@ let load_ninja ninja_flags =
          ninja_flags
        ]
     )
+let call_ninja flags = 
+  Sys.command 
+    (String.concat " " (ninja :: "-d" :: "keepdepfile":: flags))
 let output_prefix = ref None
 let bsninja_flags =
   [
@@ -7529,10 +7551,19 @@ let anonymous arg =
 let () = 
   try 
     begin match Ext_array.rfind_and_split Sys.argv Ext_string.equal "-" with 
-      | `No_split ->       Arg.parse_argv Sys.argv  bsninja_flags anonymous usage
+      | `No_split ->       
+        begin 
+          Arg.parse_argv Sys.argv  bsninja_flags anonymous usage;
+          load_ninja [| "config" |]
+        end
       | `Split (bsninja_argv, ninja_flags) 
         -> 
         Arg.parse_argv bsninja_argv bsninja_flags anonymous usage;
+        let exit_flag = call_ninja ["config"]  in
+        if exit_flag <> 0 then 
+          begin
+            exit exit_flag 
+          end; 
         load_ninja ninja_flags
     end
   with x ->

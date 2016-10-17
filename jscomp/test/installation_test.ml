@@ -13,22 +13,24 @@ let _ : _ Js.undefined =
       let bsc_exe = 
         Node.Path.join 
           [| p ;  ".."; "bin"; "bsc.exe" |] in 
-      let output = 
-        Node.Child_process.execSync 
-          (bsc_exe ^ " -where ") 
-          (Node.Child_process.option  ~encoding:"utf8" ()) in 
-      let dir = Js.String.trim output in 
-      let files = Node.Fs.readdirSync dir  in
-      let exists = 
-        files 
-        |> Js.Array.indexOf "pervasives.cmi" in 
-      let non_exists = 
-        files 
-        |> Js.Array.indexOf "pervasive.cmi" in 
-      let v = (exists >= 0 && non_exists < 0) in
-      Js.log v;
-      eq __LOC__  v true
 
+      match Node.Child_process.execSync 
+              (bsc_exe ^ " -where ") 
+              (Node.Child_process.option  ~encoding:"utf8" ()) with 
+      | output -> 
+        let dir = Js.String.trim output in 
+        let files = Node.Fs.readdirSync dir  in
+        let exists = 
+          files 
+          |> Js.Array.indexOf "pervasives.cmi" in 
+        let non_exists = 
+          files 
+          |> Js.Array.indexOf "pervasive.cmi" in 
+        let v = (exists >= 0 && non_exists < 0) in
+        Js.log v;
+        eq __LOC__  v true
+      | exception e -> 
+        assert false
     )
 
 let () = 

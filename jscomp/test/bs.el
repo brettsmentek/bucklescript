@@ -23,6 +23,11 @@
 ;; (setq a '(  '(a) )) 
 ;; (setq "gho" 3)
 ;; (setq x 3 y 2)
+(setq 
+ static-resources 
+ '("./flow_parser_sample.js"
+   "joinClasses.js"
+   ) )
 
 (setq files
       '(
