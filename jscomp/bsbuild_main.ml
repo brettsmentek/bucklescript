@@ -37,6 +37,7 @@ module Flags = struct
   let ocamllex = ("ocamllex", "ocamllex.opt")
   let bs_external_includes = "bs-external-includes"
   let bsc_flags = "bsc-flags"
+  let file_groups = "file-groups"
   let files = "files"
   let ppx_flags = "ppx-flags"
   let build_output_prefix = ("build-output-prefix", Filename.current_dir_name)
@@ -126,14 +127,15 @@ let module_info_of_mll exist mll : module_info =
   | Some x -> { x with mll = Some mll} 
 
 
-let update map name = 
+let map_update ?dir map  name = 
+  let prefix  x = match dir with None -> x | Some v -> v // x in
   let module_name = Ext_filename.module_name_of_file name in 
   let aux v name = 
-    if Filename.check_suffix name ".ml" then module_info_of_ml v name  else
-    if Filename.check_suffix name ".mll" then module_info_of_mll v name else 
-    if Filename.check_suffix name ".mli" then module_info_of_mli v name else 
-    if Filename.check_suffix name ".re" then module_info_of_re v name else 
-    if Filename.check_suffix name ".rei" then module_info_of_rei v name else 
+    if Filename.check_suffix name ".ml" then module_info_of_ml v @@ prefix name  else
+    if Filename.check_suffix name ".mll" then module_info_of_mll v @@ prefix  name else 
+    if Filename.check_suffix name ".mli" then  module_info_of_mli v @@ prefix name else 
+    if Filename.check_suffix name ".re" then  module_info_of_re v @@ prefix name else 
+    if Filename.check_suffix name ".rei" then  module_info_of_rei v @@ prefix name else 
       assert false   in 
   match String_map.find module_name map with 
   | exception Not_found 
@@ -142,8 +144,9 @@ let update map name =
     String_map.add module_name (aux (Some v) name)  map
 
 type ty = 
+  | Any
   | String 
-  | List_string 
+  | List of ty
 
 exception Expect of string * ty
 
@@ -164,7 +167,7 @@ let expect_string_opt key (global_data : Sexp_eval.env) =
 let expect_string_list key (global_data : Sexp_eval.env) = 
   match Hashtbl.find global_data key  with 
   | exception Not_found -> [ ]
-  | Atom _ | Lit _ | Data _ -> error(key, List_string)
+  | Atom _ | Lit _ | Data _ -> error(key, List String)
   | List xs -> 
     Ext_list.filter_map (fun x -> 
         match  x with 
@@ -179,13 +182,37 @@ let expect_string_list_unordered
   match Hashtbl.find global_data Flags.files with 
   | exception Not_found -> init
   | Atom _ | Lit _ 
-  | Data _ -> error(key, List_string)
+  | Data _ -> error(key, List String)
   | List files -> 
     List.fold_left (fun acc s ->
         match s with 
         | Sexp_lexer.Atom s | Lit s -> update acc s 
         | _ -> acc (* raise Type error *)
       ) init files 
+
+type 'a file_group = 
+  { dir : string ;
+    sources : 'a
+  } 
+let rec expect_file_groups  key (global_data : Sexp_eval.env) =
+  match Hashtbl.find global_data key with 
+  | exception Not_found -> []
+  | Atom _ | Lit _ 
+  | Data _ -> error (key, List Any)
+  | List ls -> List.map expect_file_group  ls 
+
+and expect_file_group (x : Sexp_lexer.t)  =
+  match x with 
+  | List [ List [ Atom "dir"; Lit dir ] ; List [ Atom "sources";  List files] ] -> 
+    { dir ; 
+      sources = List.fold_left (fun acc s ->
+        match s with 
+        | Sexp_lexer.Atom s | Lit s -> map_update ~dir  acc s 
+        | _ -> acc (* raise Type error *)
+      ) String_map.empty files
+    }
+
+  | _ -> error ("", List Any)
 
 let output_ninja (global_data : Sexp_eval.env)  = 
   let bsc = expect_string Flags.bsc global_data in 
@@ -197,13 +224,28 @@ let output_ninja (global_data : Sexp_eval.env)  =
     expect_string_list Flags.bs_external_includes  global_data in 
   let static_resources = 
     expect_string_list Flags.static_resources global_data in
+
+  let bs_file_groups = expect_file_groups Flags.file_groups global_data
+  in  
+  (* let bs_files = expect_string_list_unordered Flags.files global_data String_map.empty map_update in *)
+  let bs_files, source_dirs  = List.fold_left (fun (acc,dirs) {sources ; dir } -> 
+      String_map.merge (fun modname k1 k2 ->
+          match k1 , k2 with
+          | None , None 
+          | Some _, Some _  -> assert false 
+          | Some v, None  -> Some v 
+          | None, Some v ->  Some v 
+        ) acc  sources , dir::dirs
+    ) (String_map.empty,[]) bs_file_groups in
+  Binary_ast.write_build_cache bsbuild_cache bs_files ;
+
   let ppx_flags = 
     String.concat space @@
       Ext_list.flat_map (fun x -> ["-ppx";  x ])  @@
     expect_string_list Flags.ppx_flags global_data in 
   let bsc_computed_flags =
     let internal_includes =
-      ["."]
+      source_dirs
       |> Ext_list.flat_map (fun x -> ["-I" ; build_output_prefix // x ]) in 
     let external_includes = 
       Ext_list.flat_map (fun x -> ["-I" ; x]) bs_external_includes in 
@@ -215,10 +257,6 @@ let output_ninja (global_data : Sexp_eval.env)  =
     let bsc_flags = expect_string_list Flags.bsc_flags global_data in 
     String.concat " " ( bsc_flags @ init_flags)
   in
-
-  let bs_files = expect_string_list_unordered Flags.files global_data String_map.empty update 
-  in  
-  Binary_ast.write_build_cache bsbuild_cache bs_files ;
   let oc = open_out main_ninja in 
   begin 
     let all_deps = ref [] in
@@ -374,7 +412,7 @@ rule copy_resources
 rule reload
       command = ${bsbuild} -init
 |};
-    output_string oc (Printf.sprintf "build build.ninja : reload | bs.el %s\n" bsbuild_cache);
+    output_string oc (Printf.sprintf "build build.ninja : reload | bs.el\n" );
 
     output_string oc (Printf.sprintf "build config : phony %s\n" 
                         (String.concat " "   !all_deps)) ;
@@ -428,7 +466,10 @@ let () =
       | `No_split ->       
         begin 
           Arg.parse_argv Sys.argv  bsninja_flags anonymous usage;
-          load_ninja [| "config" |]
+          (* load_ninja [| "config" |] *)
+          (* Here the failure will cause non-terminating, since 
+             [bsbuild.exe -init] fail, it will retry again
+          *)
         end
       | `Split (bsninja_argv, ninja_flags) 
         -> 
