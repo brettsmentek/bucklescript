@@ -34300,7 +34300,8 @@ let after_parsing_sig ppf sourcefile outputprefix ast  =
       Binary_ast.write_ast
         Mli
         ~fname:sourcefile
-        ~output:((Filename.chop_extension sourcefile) ^ ".mliast")
+        ~output:(outputprefix ^ Literals.suffix_mliast)
+        (* to support relocate to another directory *)
         ast 
 
     end;
@@ -34339,7 +34340,7 @@ let interface ppf sourcefile outputprefix =
 let after_parsing_impl ppf sourcefile outputprefix ast =
   if !Js_config.binary_ast then
       Binary_ast.write_ast ~fname:sourcefile 
-        Ml ~output:((Filename.chop_extension sourcefile) ^ ".mlast")
+        Ml ~output:(outputprefix ^ Literals.suffix_mlast)
         ast ;
 
   if !Js_config.syntax_only then () else 

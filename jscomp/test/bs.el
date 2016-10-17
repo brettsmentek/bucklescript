@@ -17,6 +17,9 @@
 (setq 
  bsc-flags '("-w" "-40" "-bs-no-version-header " "-bs-diagnose" "-bs-cross-module-opt"))
 
+(setq
+ build-output-prefix "_build"
+)
 ;; (setq a '(  '(a) )) 
 ;; (setq "gho" 3)
 ;; (setq x 3 y 2)
